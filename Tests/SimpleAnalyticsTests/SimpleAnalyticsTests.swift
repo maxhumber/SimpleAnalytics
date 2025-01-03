@@ -14,7 +14,7 @@ struct SimpleAnalyticsTests {
         await confirmation("Test pageview") { done in
             let tracker = SimpleAnalytics(hostname: "simpleanalyticsswift.app")
             do {
-                try await tracker.trackPageView(path: "/test")
+                try await tracker.trackPageview(path: ["test"])
                 done()
             } catch {
                 Issue.record("Failed to log a pageview: \(error)")
@@ -25,11 +25,9 @@ struct SimpleAnalyticsTests {
     @Test func pageviewWithMetadata() async throws {
         await confirmation("Log a pageview") { done in
             let tracker = SimpleAnalytics(hostname: "simpleanalyticsswift.app")
-            let metadataDictionary = ["plan": "premium", "meta": "data", "date": "2024-01-24T11:29:35.123Z", "number": 834710, "bool": true] as [String : Any]
+            let metadata: [String: CustomStringConvertible] = ["plan": "premium", "meta": "data", "date": "2024-01-24T11:29:35.123Z", "number": 834710, "bool": true]
             do {
-                let metadataData = try JSONSerialization.data(withJSONObject: metadataDictionary, options: [])
-                let metadataJsonString = String(data: metadataData, encoding: .utf8)!
-                try await tracker.trackPageView(path: "/testmetadata", metadata: metadataJsonString)
+                try await tracker.trackPageview(path: ["testmetadata"], metadata: metadata)
                 done()
             } catch {
                 Issue.record("Failed to log pageview with metadata: \(error)")
@@ -52,11 +50,9 @@ struct SimpleAnalyticsTests {
     @Test func eventWithMetadata() async throws {
         await confirmation("Log an event with metadata") { done in
             let tracker = SimpleAnalytics(hostname: "simpleanalyticsswift.app")
-            let metadataDictionary = ["plan": "premium", "meta": "data", "date": "2024-01-24T11:29:35.123Z", "number": 834710, "bool": true] as [String : Any]
+            let metadata: [String: CustomStringConvertible] = ["plan": "premium", "meta": "data", "date": "2024-01-24T11:29:35.123Z", "number": 834710, "bool": true]
             do {
-                let metadataData = try JSONSerialization.data(withJSONObject: metadataDictionary, options: [])
-                let metadataJsonString = String(data: metadataData, encoding: .utf8)!
-                try await tracker.trackEvent(event: "test event metadata", metadata: metadataJsonString)
+                try await tracker.trackEvent(event: "test event metadata", metadata: metadata)
                 done()
             } catch {
                 Issue.record("Failed to log event with metadata: \(error)")
@@ -68,7 +64,7 @@ struct SimpleAnalyticsTests {
         await confirmation("Log an event with path") { done in
             let tracker = SimpleAnalytics(hostname: "simpleanalyticsswift.app")
             do {
-                try await tracker.trackEvent(event: "test event path", path: "/testpath1/testpath2")
+                try await tracker.trackEvent(event: "test event path", path: ["testpath1", "testpath2"])
                 done()
             } catch {
                 Issue.record("Failed to log event with path: \(error)")
@@ -79,11 +75,9 @@ struct SimpleAnalyticsTests {
     @Test func eventWithPathAndMetadata() async throws {
         await confirmation("Log an event with path and metadata") { done in
             let tracker = SimpleAnalytics(hostname: "simpleanalyticsswift.app")
-            let metadataDictionary = ["plan": "premium", "meta": "data"]
+            let metadata = ["plan": "premium", "meta": "data"]
             do {
-                let metadataData = try JSONSerialization.data(withJSONObject: metadataDictionary, options: [])
-                let metadataJsonString = String(data: metadataData, encoding: .utf8)!
-                try await tracker.trackEvent(event: "test event path metadata", path: "/testpath1/testpathmetadata", metadata: metadataJsonString)
+                try await tracker.trackEvent(event: "test event path metadata", path: ["testpath1", "testpathmetadata"], metadata: metadata)
                 done()
             } catch {
                 Issue.record("Failed to log event with path and metadata: \(error)")

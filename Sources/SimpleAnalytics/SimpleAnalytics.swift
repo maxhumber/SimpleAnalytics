@@ -25,12 +25,12 @@ public class SimpleAnalytics {
     private let userTimezone = TimeZone.current.identifier
     /// The last date a unique visit was tracked.
     private var visitDate: Date?
-    private var sharedDefaultsSuiteName: String?
+    private let defaults: UserDefaults
     
     /// Defines if the user is opted out. When set to `true`, all tracking will be skipped. This is persisted between sessions.
     public var isOptedOut: Bool {
-        get { UserDefaults.standard.bool(forKey: Keys.optedOutKey) }
-        set { UserDefaults.standard.setValue(newValue, forKey: Keys.optedOutKey) }
+        get { defaults.bool(forKey: Keys.optedOutKey) }
+        set { defaults.setValue(newValue, forKey: Keys.optedOutKey) }
     }
     
     /// Create the SimpleAnalytics instance that can be used to trigger events and pageviews.
@@ -39,48 +39,46 @@ public class SimpleAnalytics {
     ///   - sharedDefaultsSuiteName: Optional. When extensions (such as a main app and widget) have a set of sharedDefaults (using an App Group) that unique users can be counted once.
     public init(hostname: String, sharedDefaultsSuiteName suiteName: String? = nil) {
         self.hostname = hostname
-        if let suiteName {
-            self.sharedDefaultsSuiteName = suiteName
-            self.visitDate = UserDefaults(suiteName: suiteName)?.object(forKey: Keys.visitDateKey) as? Date
-        } else {
-            self.visitDate = UserDefaults.standard.object(forKey: Keys.visitDateKey) as? Date
-        }
+        self.defaults = suiteName.flatMap(UserDefaults.init(suiteName:)) ?? .standard
+        self.visitDate = defaults.object(forKey: Keys.visitDateKey) as? Date
     }
     
-    /// Track a pageview or event
-    /// - Parameters:
-    ///   - event: Optional event name. If `nil`, tracks a pageview.
-    ///   - path: Path of the page or event as a string array, e.g., `["list", "detailview", "edit"]`.
-    ///   - metadata: Optional metadata dictionary, e.g., `["plan": "premium", "referrer": "landing_page"]`.
-    public func track(event: String? = nil, path: [String] = [], metadata: [String: CustomStringConvertible]? = nil) {
+    /// Track a pageview
+    /// - Parameter path: The path of the page as string array, for example: `["list", "detailview", "edit"]`
+    /// - Parameter metadata: An optional dictionary of metadata to be sent with the pageview. `["plan": "premium", "referrer": "landing_page"]`
+    public func track(path: [String], metadata: [String: CustomStringConvertible]? = nil) {
         Task {
             do {
-                try await trackRaw(event: event, path: path, metadata: metadata)
+                try await trackPageview(path: path, metadata: metadata)
             } catch {
                 debugPrint("SimpleAnalytics: Error tracking pageview: \(error.localizedDescription)")
             }
         }
     }
     
-    func trackRaw(event: String? = nil, path: [String] = [], metadata: [String: CustomStringConvertible]? = nil) async throws {
-        let formattedPath = pathToString(path: path)
-        let formattedMetadata = metadataToJsonString(metadata: metadata)
-        if let event {
-            try await trackEvent(event: event, path: formattedPath, metadata: formattedMetadata)
-        } else {
-            try await trackPageView(path: formattedPath, metadata: formattedMetadata)
+    /// Track an event
+    /// - Parameter event: The event name
+    /// - Parameter path: optional path array where the event took place, for example: `["list", "detailview", "edit"]`
+    /// - Parameter metadata: An optional dictionary of metadata to be sent with the pageview. `["plan": "premium", "referrer": "landing_page"]`
+    public func track(event: String, path: [String] = [], metadata: [String: CustomStringConvertible]? = nil) {
+        Task {
+            do {
+                try await trackEvent(event: event, path: path, metadata: metadata)
+            } catch {
+                debugPrint("SimpleAnalytics: Error tracking event: \(error.localizedDescription)")
+            }
         }
     }
     
-    func trackPageView(path: String, metadata: String? = nil) async throws {
+    public func trackPageview(path: [String], metadata: [String: CustomStringConvertible]? = nil) async throws {
         guard !isOptedOut else { return }
         let userAgent = try await getUserAgent()
         let event = Event(
             type: .pageview,
             hostname: hostname,
             event: "pageview",
-            ua: userAgent,
-            path: path,
+            userAgent: userAgent,
+            path: pathToString(path: path),
             language: userLanguage,
             timezone: userTimezone,
             unique: isUnique(),
@@ -89,15 +87,15 @@ public class SimpleAnalytics {
         try await send(event: event)
     }
     
-    func trackEvent(event: String, path: String = "", metadata: String? = nil) async throws {
+    public func trackEvent(event: String, path: [String] = [], metadata: [String: CustomStringConvertible]? = nil) async throws {
         guard !isOptedOut else { return }
         let userAgent = try await getUserAgent()
         let event = Event(
             type: .event,
             hostname: hostname,
             event: event,
-            ua: userAgent,
-            path: path,
+            userAgent: userAgent,
+            path: pathToString(path: path),
             language: userLanguage,
             timezone: userTimezone,
             unique: isUnique(),
@@ -123,29 +121,12 @@ public class SimpleAnalytics {
         return nil
     }
     
-    /// Serializes metadata dictionary into a JSON string.
-    /// - Parameter metadata: The metadata dictionary, which is optional.
-    /// - Returns: A JSON string representation of the metadata or nil if serialization fails or metadata is nil/empty.
-    func metadataToJsonString(metadata: [String: CustomStringConvertible]?) -> String? {
-        guard let metadata, !metadata.isEmpty else { return nil }
-        do {
-            let data = try JSONSerialization.data(withJSONObject: metadata, options: [])
-            return String(data: data, encoding: .utf8)
-        } catch {
-            print("Error serializing metadata to JSON string: \(error)")
-            return nil
-        }
-    }
-    
     /// Simple Analytics uses the `isUnique` flag to determine visitors from pageviews. The first event/pageview for the day
     /// should get this `isUnique` flag.
     /// - Returns: if this is a unique first visit for today
     func isUnique() -> Bool {
-        if let visitDate, Calendar.current.isDateInToday(visitDate) {
-            return false
-        }
+        if let visitDate, Calendar.current.isDateInToday(visitDate) { return false }
         visitDate = Date()
-        let defaults = UserDefaults(suiteName: sharedDefaultsSuiteName) ?? UserDefaults.standard
         defaults.set(visitDate, forKey: Keys.visitDateKey)
         return true
     }
@@ -189,7 +170,7 @@ extension SimpleAnalytics {
         let type: EventType
         let hostname: String
         let event: String
-        var ua: String? = nil
+        var userAgent: String? = nil
         var path: String? = nil
         var language: String? = nil
         var timezone: String? = nil
@@ -198,13 +179,33 @@ extension SimpleAnalytics {
         var screenWidth: Int? = nil
         var screenHeight: Int? = nil
         var unique: Bool? = nil
-        var metadata: String? = nil
+        var metadata: [String: CustomStringConvertible]? = nil
+        
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(type, forKey: .type)
+            try container.encode(hostname, forKey: .hostname)
+            try container.encode(event, forKey: .event)
+            try container.encodeIfPresent(userAgent, forKey: .userAgent)
+            try container.encodeIfPresent(path, forKey: .path)
+            try container.encodeIfPresent(language, forKey: .language)
+            try container.encodeIfPresent(timezone, forKey: .timezone)
+            try container.encodeIfPresent(viewportWidth, forKey: .viewportWidth)
+            try container.encodeIfPresent(viewportHeight, forKey: .viewportHeight)
+            try container.encodeIfPresent(screenWidth, forKey: .screenWidth)
+            try container.encodeIfPresent(screenHeight, forKey: .screenHeight)
+            try container.encodeIfPresent(unique, forKey: .unique)
+            if let metadata {
+                let stringDictionary = metadata.mapValues { $0.description }
+                try container.encode(stringDictionary, forKey: .metadata)
+            }
+        }
         
         enum CodingKeys: String, CodingKey {
             case type
             case hostname
             case event
-            case ua
+            case userAgent = "ua"
             case path
             case language
             case timezone
