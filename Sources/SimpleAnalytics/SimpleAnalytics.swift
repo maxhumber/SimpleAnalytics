@@ -1,98 +1,79 @@
-//
-//  SimpleAnalytics.swift
-//  
-//
-//  Created by Roel van der Kraan on 27/10/2023.
-//
-
 import Foundation
+import WebKit
 
-/// SimpleAnalytics allows you to send events and pageviews from Swift  to Simple Analytics
+/// SimpleAnalytics allows you to send events and pageviews from Swift to Simple Analytics
 ///
 /// - Important: Make sure the hostname matches the website domain name in Simple Analytics (without `http://` or `https://`).
 ///
-/// ````
+/// ```
 /// let simpleAnalytics = SimpleAnalytics(hostname: "mobileapp.yourdomain.com")
-/// ````
+/// ```
+///
 /// You can create an instance where you need it, or you can make an extension and use it as a static class.
-/// ````
+/// ```
 /// import SimpleAnalytics
 ///
 /// extension SimpleAnalytics {
 ///    static let shared: SimpleAnalytics = SimpleAnalytics(hostname: "mobileapp.yourdomain.com")
 /// }
-/// ````
-final public class SimpleAnalytics: NSObject {
+/// ```
+public class SimpleAnalytics {
     /// The hostname of the website in Simple Analytics the tracking should be send to. Without `https://`
     let hostname: String
     private var userAgent: String?
-    private let userLanguage: String
-    private let userTimezone: String
+    private let userLanguage = Locale.current.identifier
+    private let userTimezone = TimeZone.current.identifier
     /// The last date a unique visit was tracked.
     private var visitDate: Date?
     private var sharedDefaultsSuiteName: String?
     
     /// Defines if the user is opted out. When set to `true`, all tracking will be skipped. This is persisted between sessions.
     public var isOptedOut: Bool {
-        get {
-            UserDefaults.standard.bool(forKey: Keys.optedOutKey)
-        }
-        set {
-            UserDefaults.standard.setValue(newValue, forKey: Keys.optedOutKey)
-        }
+        get { UserDefaults.standard.bool(forKey: Keys.optedOutKey) }
+        set { UserDefaults.standard.setValue(newValue, forKey: Keys.optedOutKey) }
     }
     
     /// Create the SimpleAnalytics instance that can be used to trigger events and pageviews.
-    /// - Parameter hostname: The hostname as found in SimpleAnalytics, without `https://`
-    public init(hostname: String) {
+    /// - Parameters:
+    ///   - hostname: The hostname as found in SimpleAnalytics, without `https://`
+    ///   - sharedDefaultsSuiteName: Optional. When extensions (such as a main app and widget) have a set of sharedDefaults (using an App Group) that unique users can be counted once.
+    public init(hostname: String, sharedDefaultsSuiteName suiteName: String? = nil) {
         self.hostname = hostname
-        self.userLanguage = Locale.current.identifier
-        self.userTimezone = TimeZone.current.identifier
-        self.visitDate = UserDefaults.standard.object(forKey: Keys.visitDateKey) as? Date
+        if let suiteName {
+            self.sharedDefaultsSuiteName = suiteName
+            self.visitDate = UserDefaults(suiteName: suiteName)?.object(forKey: Keys.visitDateKey) as? Date
+        } else {
+            self.visitDate = UserDefaults.standard.object(forKey: Keys.visitDateKey) as? Date
+        }
     }
     
-    /// Create the SimpleAnalytics instance that can be used to trigger events and pageviews.
-    /// - Parameter hostname: The hostname as found in SimpleAnalytics, without `https://`
-    /// - Parameter: sharedDefaultsSuiteName: When extensions (such as a main app and widget) have a set of sharedDefaults (using an App Group) that unique user can be counted once using this (instead of two or more times when using app and widget, etc.)
-    public init(hostname: String, sharedDefaultsSuiteName: String) {
-        self.hostname = hostname
-        self.userLanguage = Locale.current.identifier
-        self.userTimezone = TimeZone.current.identifier
-        self.sharedDefaultsSuiteName = sharedDefaultsSuiteName
-        self.visitDate = UserDefaults(suiteName: sharedDefaultsSuiteName)?.object(forKey: Keys.visitDateKey) as? Date
-    }
-    
-    /// Track a pageview
-    /// - Parameter path: The path of the page as string array, for example: `["list", "detailview", "edit"]`
-    /// - Parameter metadata: An optional dictionary of metadata to be sent with the pageview. `["plan": "premium", "referrer": "landing_page"]`
-    public func track(path: [String], metadata: [String: Any]? = nil) {
+    /// Track a pageview or event
+    /// - Parameters:
+    ///   - event: Optional event name. If `nil`, tracks a pageview.
+    ///   - path: Path of the page or event as a string array, e.g., `["list", "detailview", "edit"]`.
+    ///   - metadata: Optional metadata dictionary, e.g., `["plan": "premium", "referrer": "landing_page"]`.
+    public func track(event: String? = nil, path: [String] = [], metadata: [String: CustomStringConvertible]? = nil) {
         Task {
             do {
-                try await self.trackPageView(path: pathToString(path: path), metadata: metadataToJsonString(metadata: metadata))
+                try await trackRaw(event: event, path: path, metadata: metadata)
             } catch {
                 debugPrint("SimpleAnalytics: Error tracking pageview: \(error.localizedDescription)")
             }
         }
     }
     
-    /// Track an event
-    /// - Parameter event: The event name
-    /// - Parameter path: optional path array where the event took place, for example: `["list", "detailview", "edit"]`
-    /// - Parameter metadata: An optional dictionary of metadata to be sent with the pageview. `["plan": "premium", "referrer": "landing_page"]`
-    public func track(event: String, path: [String] = [], metadata: [String: Any]? = nil) {
-        Task {
-            do {
-                try await self.trackEvent(event: event, path: pathToString(path: path), metadata: metadataToJsonString(metadata: metadata))
-            } catch {
-                debugPrint("SimpleAnalytics: Error tracking event: \(error.localizedDescription)")
-            }
+    func trackRaw(event: String? = nil, path: [String] = [], metadata: [String: CustomStringConvertible]? = nil) async throws {
+        let formattedPath = pathToString(path: path)
+        let formattedMetadata = metadataToJsonString(metadata: metadata)
+        if let event {
+            try await trackEvent(event: event, path: formattedPath, metadata: formattedMetadata)
+        } else {
+            try await trackPageView(path: formattedPath, metadata: formattedMetadata)
         }
     }
     
-    internal func trackPageView(path: String, metadata: String? = nil) async throws {
-        guard !isOptedOut else {
-            return
-        }
+    func trackPageView(path: String, metadata: String? = nil) async throws {
+        guard !isOptedOut else { return }
         let userAgent = try await getUserAgent()
         let event = Event(
             type: .pageview,
@@ -105,14 +86,11 @@ final public class SimpleAnalytics: NSObject {
             unique: isUnique(),
             metadata: metadata
         )
-        
-        try await RequestDispatcher.sendEventRequest(event: event)
+        try await send(event: event)
     }
     
-    internal func trackEvent(event: String, path: String = "", metadata: String? = nil) async throws {
-        guard !isOptedOut else {
-            return
-        }
+    func trackEvent(event: String, path: String = "", metadata: String? = nil) async throws {
+        guard !isOptedOut else { return }
         let userAgent = try await getUserAgent()
         let event = Event(
             type: .event,
@@ -125,29 +103,31 @@ final public class SimpleAnalytics: NSObject {
             unique: isUnique(),
             metadata: metadata
         )
-        
-        try await RequestDispatcher.sendEventRequest(event: event)
+        try await send(event: event)
     }
     
     /// Converts an array of strings to a slug structure
     /// - Parameter path: The array of paths, for example `["list", "detailview"]`.
     /// - Returns: a slug of the path, for the example `"/list/detailview"`
-    internal func pathToString(path: [String]) -> String {
-        var safePath: [String] = []
-        for pathItem in path {
-            if let slug = pathItem.convertedToSlug() {
-                safePath.append(slug)
-            }
+    func pathToString(path: [String]) -> String {
+        "/" + path.compactMap { convertToSlug(string: $0) }.joined(separator: "/")
+    }
+    
+    func convertToSlug(string: String) -> String? {
+        let slugSafeCharacters = CharacterSet(charactersIn: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-")
+        if let latin = string.applyingTransform(StringTransform("Any-Latin; Latin-ASCII; Lower;"), reverse: false) {
+            let urlComponents = latin.components(separatedBy: slugSafeCharacters.inverted)
+            let result = urlComponents.filter { $0 != "" }.joined(separator: "-")
+            if result.count > 0 { return result }
         }
-        return "/\(safePath.joined(separator: "/"))"
+        return nil
     }
     
     /// Serializes metadata dictionary into a JSON string.
     /// - Parameter metadata: The metadata dictionary, which is optional.
     /// - Returns: A JSON string representation of the metadata or nil if serialization fails or metadata is nil/empty.
-    internal func metadataToJsonString(metadata: [String: Any]?) -> String? {
-        guard let metadata = metadata, !metadata.isEmpty else { return nil }
-        
+    func metadataToJsonString(metadata: [String: CustomStringConvertible]?) -> String? {
+        guard let metadata, !metadata.isEmpty else { return nil }
         do {
             let data = try JSONSerialization.data(withJSONObject: metadata, options: [])
             return String(data: data, encoding: .utf8)
@@ -160,44 +140,85 @@ final public class SimpleAnalytics: NSObject {
     /// Simple Analytics uses the `isUnique` flag to determine visitors from pageviews. The first event/pageview for the day
     /// should get this `isUnique` flag.
     /// - Returns: if this is a unique first visit for today
-    internal func isUnique() -> Bool {
-        if let visitDate = self.visitDate {
-            if Calendar.current.isDateInToday(visitDate) {
-                // Last visit tracked is in today, so not unique
-                return false
-            } else {
-                // Last visit is not in today, so unique.
-                self.visitDate = Date()
-                if let sharedDefaults = UserDefaults(suiteName: self.sharedDefaultsSuiteName) {
-                    sharedDefaults.set(self.visitDate, forKey: Keys.visitDateKey)
-                } else {
-                    UserDefaults.standard.set(self.visitDate, forKey: Keys.visitDateKey)
-                }
-                return true
-            }
-        } else {
-            // No visit date yet, initialize it
-            visitDate = Date()
-            if let sharedDefaults = UserDefaults(suiteName: self.sharedDefaultsSuiteName) {
-                sharedDefaults.set(visitDate, forKey: Keys.visitDateKey)
-            } else {
-                UserDefaults.standard.set(visitDate, forKey: Keys.visitDateKey)
-            }                
-            return true
+    func isUnique() -> Bool {
+        if let visitDate, Calendar.current.isDateInToday(visitDate) {
+            return false
         }
+        visitDate = Date()
+        let defaults = UserDefaults(suiteName: sharedDefaultsSuiteName) ?? UserDefaults.standard
+        defaults.set(visitDate, forKey: Keys.visitDateKey)
+        return true
     }
     
     /// Get the cached userAgent or fetch a new one
-    internal func getUserAgent() async throws -> String {
+    @MainActor
+    func getUserAgent() async throws -> String {
         if let userAgent { return userAgent }
-        let newUserAgent = try await UserAgentFetcher.fetch()
+        let webView = WKWebView(frame: .zero)
+        defer {
+            webView.stopLoading()
+            webView.navigationDelegate = nil
+            webView.uiDelegate = nil
+        }
+        let result = try await webView.evaluateJavaScript("navigator.userAgent")
+        let newUserAgent = result as! String
         userAgent = newUserAgent
         return newUserAgent
     }
     
-    /// Keys used to store things in UserDefaults
-    internal struct Keys {
+    func send(event: Event) async throws {
+        guard let url = URL(string: "https://queue.simpleanalyticscdn.com/events") else { throw URLError(.badURL) }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let jsonData = try JSONEncoder().encode(event)
+        request.httpBody = jsonData
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        guard (200...299).contains(httpResponse.statusCode) else { throw URLError(URLError.Code(rawValue: httpResponse.statusCode)) }
+    }
+}
+
+extension SimpleAnalytics {
+    struct Keys {
         static let visitDateKey = "simpleanalytics.visitdate"
         static let optedOutKey = "simpleanalytics.isoptedout"
+    }
+    
+    struct Event: Encodable {
+        let type: EventType
+        let hostname: String
+        let event: String
+        var ua: String? = nil
+        var path: String? = nil
+        var language: String? = nil
+        var timezone: String? = nil
+        var viewportWidth: Int? = nil
+        var viewportHeight: Int? = nil
+        var screenWidth: Int? = nil
+        var screenHeight: Int? = nil
+        var unique: Bool? = nil
+        var metadata: String? = nil
+        
+        enum CodingKeys: String, CodingKey {
+            case type
+            case hostname
+            case event
+            case ua
+            case path
+            case language
+            case timezone
+            case viewportWidth = "viewport_width"
+            case viewportHeight = "viewport_height"
+            case screenWidth = "screen_width"
+            case screenHeight = "screen_height"
+            case unique
+            case metadata
+        }
+    }
+    
+    enum EventType: String, Encodable {
+        case event
+        case pageview
     }
 }
