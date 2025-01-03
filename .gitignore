@@ -4,6 +4,7 @@
 
 ## Custom
 .DS_Store
+.swiftpm/xcode/package.xcworkspace
 
 ## Build generated
 build/
