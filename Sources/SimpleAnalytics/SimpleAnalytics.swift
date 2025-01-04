@@ -70,6 +70,9 @@ public class SimpleAnalytics {
         }
     }
     
+    /// Track a pageview
+    /// - Parameter path: The path of the page as string array, for example: `["list", "detailview", "edit"]`
+    /// - Parameter metadata: An optional dictionary of metadata to be sent with the pageview. `["plan": "premium", "referrer": "landing_page"]`
     public func trackPageview(path: [String], metadata: [String: CustomStringConvertible]? = nil) async throws {
         guard !isOptedOut else { return }
         let userAgent = try await getUserAgent()
@@ -87,6 +90,10 @@ public class SimpleAnalytics {
         try await send(event: event)
     }
     
+    /// Track an event
+    /// - Parameter event: The event name
+    /// - Parameter path: optional path array where the event took place, for example: `["list", "detailview", "edit"]`
+    /// - Parameter metadata: An optional dictionary of metadata to be sent with the pageview. `["plan": "premium", "referrer": "landing_page"]`
     public func trackEvent(event: String, path: [String] = [], metadata: [String: CustomStringConvertible]? = nil) async throws {
         guard !isOptedOut else { return }
         let userAgent = try await getUserAgent()
@@ -131,7 +138,6 @@ public class SimpleAnalytics {
         return true
     }
     
-    /// Get the cached userAgent or fetch a new one
     @MainActor
     func getUserAgent() async throws -> String {
         if let userAgent { return userAgent }
